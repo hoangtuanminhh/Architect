@@ -1,0 +1,123 @@
+@startuml AI007_Architecture
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam roundcorner 8
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam defaultFontSize 12
+
+title Lotus Fin - Phân Hệ AI007: Financial Copilot Orchestrator
+
+package "Presentation & Client Interface" {
+    class "Frontend Chatbot / Desk" as ChatClient <<UI_Component>> {
+        + send_message(query: str, session_id: str)
+        + render_widgets(ui_widgets: List<dict>)
+    }
+}
+
+package "API Gateway Layer (Frappe Whitelist)" {
+    class "AI007 Service API" as ServiceAPI <<Service>> {
+        + chat(message: str, session_id: str, context: str): dict
+    }
+}
+
+package "Orchestration & NLU Core" {
+    class CopilotOrchestrator <<Central_Orchestrator>> {
+        + process_request(request: CopilotRequest): CopilotResponse
+        - _extract_intent(message: str): Tuple<IntentType, dict>
+        - _handle_financing(entities: dict): Tuple<str, CopilotAction, dict>
+        - _handle_stress_test(entities: dict): Tuple<str, CopilotAction, dict>
+    }
+
+    class ConversationContext <<Session_Context>> {
+        + session_id: str
+        + current_intent: IntentType
+        + extracted_entities: dict
+        + last_action: str
+        + is_authenticated: bool
+        + company_id: str
+    }
+}
+
+package "Domain Entities & Contracts" {
+    enum IntentType {
+        FINANCING_SUPPORT
+        REPAYMENT_STRESS
+        HEALTH_CHECK
+        GENERAL_QA
+        UNKNOWN
+    }
+
+    class CopilotRequest <<DTO>> {
+        + message: str
+        + session_id: str
+        + company_id: str = "Lotus_SME"
+        + context: dict
+    }
+
+    class CopilotAction <<ValueObject>> {
+        + module_called: str
+        + action_type: str
+        + parameters: dict
+        + result_summary: str
+    }
+
+    class CopilotResponse <<DTO>> {
+        + session_id: str
+        + intent: IntentType
+        + reply_message: str
+        + actions_taken: List<CopilotAction>
+        + suggested_next_steps: List<str>
+        + ui_widgets: List<dict>
+        + data_mode: str = "simulation"
+    }
+
+    class UIWidgetSpec <<Widget_Schema>> {
+        + widget_type: str
+        + data: dict
+    }
+    note bottom of UIWidgetSpec
+        Supported Widget Types:
+        - FINANCING_TABLE (Top matched credit products)
+        - STRESS_COMPARISON (Baseline vs Shock metrics)
+        - REPAYMENT_SCHEDULE (Cashflow & Amortization chart)
+    end note
+}
+
+package "Target Domain Modules (Cross-Module Calls)" {
+    component "AI005: Financing Decision Support" as Mod_AI005 {
+        portin "match_products()" as P_AI005
+    }
+
+    component "AI006: Repayment & Stress Simulation" as Mod_AI006 {
+        portin "calculate_schedule()" as P_AI006_R
+        portin "run_stress_test()" as P_AI006_S
+    }
+}
+
+' Relationships & Data Flow
+ChatClient --> ServiceAPI : HTTP POST /api/method/...AI007.service.chat
+ServiceAPI ..> CopilotRequest : parses input
+ServiceAPI --> CopilotOrchestrator : dispatches
+CopilotOrchestrator ..> ConversationContext : tracks state
+CopilotOrchestrator ..> IntentType : classifies
+
+CopilotOrchestrator --> P_AI005 : if Intent == FINANCING_SUPPORT
+CopilotOrchestrator --> P_AI006_R : if Intent == REPAYMENT_STRESS (no shock)
+CopilotOrchestrator --> P_AI006_S : if Intent == REPAYMENT_STRESS (rate shock)
+
+CopilotOrchestrator ..> CopilotResponse : constructs
+CopilotResponse *-- CopilotAction : records actions
+CopilotResponse *-- IntentType : labels intent
+CopilotResponse *-- UIWidgetSpec : packages interactive UI
+ServiceAPI ..> ChatClient : JSON response (text + widget data)
+
+note right of CopilotOrchestrator
+  Architectural Pattern:
+  - Modular Monolith with Orchestrator
+  - Single Entrypoint for Natural Language
+  - Zero hallucination via strictly typed widgets
+  - Decoupled from concrete AI providers
+end note
+
+@enduml

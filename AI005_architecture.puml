@@ -1,0 +1,221 @@
+@startuml AI005_Architecture
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam roundcorner 8
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam defaultFontSize 12
+
+title Lotus Fin - Phân Hệ AI005: AI Financing Decision Support & 9 KPIs What-if Engine
+
+package "Presentation & API Gateway (Frappe)" {
+    class "AI005 Service API" as ServiceAPI <<Service>> {
+        + ask_copilot(company: str, query: str): dict
+        + match_financing(company: str, amount: float, term_months: int, purpose: str, custom_profile: dict): dict
+        + simulate_what_if(company: str, sales_change_pct: float, collection_delay_days: int, ...): dict
+    }
+}
+
+package "NLU & AI Grounding Layer" {
+    class FinancingIntentParser <<NLU>> {
+        + {static} parse_user_query(query_text: str): FundingRequest
+    }
+
+    class FinancingAIAdvisor <<LLM_Advisor>> {
+        - provider: BaseAIProvider
+        + generate_advice(profile: CompanyFinancialProfile, request: FundingRequest, match_result: FinancingDecisionResult, user_query: str, what_if_summary: dict): dict
+    }
+}
+
+package "Deterministic Domain Engines" {
+    class FinancingDecisionEngine <<Deterministic_Matcher>> {
+        - catalog: List<FinancingProduct>
+        + evaluate(profile: CompanyFinancialProfile, request: FundingRequest): FinancingDecisionResult
+        - _check_eligibility(product: FinancingProduct, profile: CompanyFinancialProfile, request: FundingRequest): List<str>
+        - _score_product(product: FinancingProduct, profile: CompanyFinancialProfile, request: FundingRequest, min_rate: Decimal, rate_range: Decimal): MatchedOption
+    }
+
+    class WhatIfScenarioEngine <<Deterministic_Simulation>> {
+        - period_days: int
+        - safety_cash_buffer: Decimal
+        + simulate(base_snapshot: dict, params: ScenarioParameters, scenario_id: str, company: str): ScenarioSimulationResult
+        - _create_kpi(metric_id: str, metric_name: str, base_val: Decimal, sim_val: Decimal, unit: str, is_ratio: bool): KPIValue
+    }
+}
+
+package "Data Repository & Catalog" {
+    class CatalogRepository <<Repository>> {
+        + {static} get_catalog(): List<FinancingProduct>
+        + {static} get_active_catalog(): List<FinancingProduct>
+        + {static} get_product_by_id(product_id: str): FinancingProduct
+    }
+    
+    note bottom of CatalogRepository
+        SME Credit Tariffs:
+        - VPBank: VPB_SME_FAST_LOAN (Unsecured)
+        - Techcombank: TCB_SME_OVERDRAFT (Overdraft)
+        - Vietcombank: VCB_MEDIUM_TERM_SECURED (Secured)
+        - BIDV: BIDV_INVOICE_FACTORING (Factoring)
+        - TPBank: TPB_BIZ_INNOVATION (SCF)
+        Audit: TTL=30 days, Source Verified
+    end note
+}
+
+package "Domain Entities & DTOs" {
+    enum ProductType {
+        UNSECURED_LOAN
+        SECURED_LOAN
+        OVERDRAFT
+        FACTORING
+        INVOICE_DISCOUNT
+        SCF
+    }
+
+    enum RateType {
+        FIXED
+        FLOATING
+    }
+
+    enum FundingPurpose {
+        WORKING_CAPITAL
+        EQUIPMENT
+        INVOICE_RECOVERY
+        EXPANSION
+    }
+
+    class FinancingProduct <<Entity>> {
+        + product_id: str
+        + provider: str
+        + product_name: str
+        + product_type: ProductType
+        + amount_min: Decimal
+        + amount_max: Decimal
+        + nominal_rate_annual: Decimal
+        + term_min_months: int
+        + term_max_months: int
+        + min_annual_revenue: Decimal
+        + min_dscr_threshold: Decimal
+        + requires_collateral: bool
+        + disbursement_speed_days: int
+        + ttl_days: int
+        + status: str
+    }
+
+    class CompanyFinancialProfile <<ValueObject>> {
+        + company_name: str
+        + operating_months: int
+        + annual_revenue: Decimal
+        + current_cash_balance: Decimal
+        + current_dscr: Decimal
+        + has_collateral: bool
+        + projected_shortfall_days: int
+    }
+
+    class FundingRequest <<ValueObject>> {
+        + amount: Decimal
+        + term_months: int
+        + purpose: FundingPurpose
+        + currency: str
+    }
+
+    class MatchedOption <<ValueObject>> {
+        + product_id: str
+        + provider: str
+        + match_score: float
+        + score_breakdown: dict
+        + nominal_rate_annual: float
+        + estimated_monthly_interest: float
+        + matched_reasons: List<str>
+        + missing_criteria: List<str>
+    }
+
+    class DisqualifiedOption <<ValueObject>> {
+        + product_id: str
+        + provider: str
+        + reasons: List<str>
+    }
+
+    class FinancingDecisionResult <<DTO>> {
+        + status: str
+        + request_summary: dict
+        + matched_options_count: int
+        + matched_products: List<dict>
+        + disqualified_products_count: int
+        + disqualified_summary: List<dict>
+        + policy_declaration: dict
+    }
+
+    class ScenarioParameters <<ValueObject>> {
+        + sales_change_pct: Decimal
+        + collection_delay_days: int
+        + supplier_due_shift_days: int
+        + payroll_change_pct: Decimal
+        + opex_change_pct: Decimal
+        + one_off_expense: Decimal
+        + financing_amount: Decimal
+        + financing_term_months: int
+        + financing_rate_annual: Decimal
+    }
+
+    class KPIValue <<ValueObject>> {
+        + metric_id: str
+        + metric_name: str
+        + baseline: float
+        + simulation: float
+        + absolute_change: float
+        + relative_change: float
+        + unit: str
+    }
+
+    class ScenarioSimulationResult <<DTO>> {
+        + scenario_id: str
+        + company: str
+        + data_mode: str = "simulation"
+        + revenue: KPIValue
+        + gross_profit: KPIValue
+        + gross_margin: KPIValue
+        + ar_outstanding: KPIValue
+        + dso: KPIValue
+        + net_cash_flow: KPIValue
+        + ending_cash: KPIValue
+        + ccc: KPIValue
+        + cash_shortfall: KPIValue
+        + shortfall_events: List<dict>
+    }
+}
+
+' Relationships
+ServiceAPI --> FinancingIntentParser : uses
+ServiceAPI --> FinancingDecisionEngine : delegates
+ServiceAPI --> WhatIfScenarioEngine : delegates
+ServiceAPI --> FinancingAIAdvisor : uses
+
+FinancingIntentParser ..> FundingRequest : creates
+FinancingDecisionEngine --> CatalogRepository : reads active tariffs
+CatalogRepository o-- FinancingProduct
+FinancingProduct *-- ProductType
+FinancingProduct *-- RateType
+FundingRequest *-- FundingPurpose
+
+FinancingDecisionEngine ..> CompanyFinancialProfile : evaluates
+FinancingDecisionEngine ..> FundingRequest : evaluates
+FinancingDecisionEngine ..> FinancingDecisionResult : produces
+FinancingDecisionResult *-- MatchedOption
+FinancingDecisionResult *-- DisqualifiedOption
+
+WhatIfScenarioEngine ..> ScenarioParameters : applies
+WhatIfScenarioEngine ..> ScenarioSimulationResult : produces
+ScenarioSimulationResult *-- KPIValue
+
+FinancingAIAdvisor ..> FinancingDecisionResult : grounds narrative
+FinancingAIAdvisor ..> ScenarioSimulationResult : grounds narrative
+
+note right of ServiceAPI
+  Guards & Policies:
+  - R4/R5 bank-write = OFF
+  - data_mode = 'simulation'
+  - Decimal arithmetic (ROUND_HALF_UP)
+  - Zero DB write on simulation
+end note
+
+@enduml

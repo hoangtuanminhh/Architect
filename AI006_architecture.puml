@@ -1,0 +1,175 @@
+@startuml AI006_Architecture
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam roundcorner 8
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam defaultFontSize 12
+
+title Lotus Fin - Phân Hệ AI006: Deterministic Repayment & Stress Simulation Engine
+
+package "Presentation & API Gateway (Frappe)" {
+    class "AI006 Service API" as ServiceAPI <<Service>> {
+        + calculate_repayment_schedule(principal: float, annual_rate: float, term_months: int, amortization_method: str, payment_frequency: str, grace_period_months: int, processing_fee_pct: float, scenario_id: str): dict
+        + run_stress_test(principal: float, annual_rate: float, term_months: int, stress_type: str, rate_shock_bps: int, term_extension_months: int, early_repayment_month: int, grace_period_months: int, amortization_method: str, scenario_id: str): dict
+    }
+}
+
+package "Deterministic Engines Layer" {
+    class RepaymentEngine <<Deterministic_Engine>> {
+        + calculate_schedule(loan_terms: LoanTerms): RepaymentScheduleResult
+        - _calc_equal_installment(principal: Decimal, period_rate: Decimal, total_periods: int, start_date: datetime, freq: PaymentFrequency, grace: int): List<PaymentRecord>
+        - _calc_equal_principal(principal: Decimal, period_rate: Decimal, total_periods: int, start_date: datetime, freq: PaymentFrequency, grace: int): List<PaymentRecord>
+        - _calc_flat_rate(principal: Decimal, annual_rate: Decimal, total_periods: int, start_date: datetime, freq: PaymentFrequency, periods_per_year: int, grace: int): List<PaymentRecord>
+        - _calc_bullet(principal: Decimal, period_rate: Decimal, total_periods: int, start_date: datetime, freq: PaymentFrequency): List<PaymentRecord>
+        - _calculate_fees(loan_terms: LoanTerms): dict
+        - _build_summary(schedule: List<PaymentRecord>, fees: dict, loan_terms: LoanTerms, total_periods: int): dict
+        - _build_cashflow_impact(schedule: List<PaymentRecord>, fees: dict, loan_terms: LoanTerms): List<dict>
+    }
+
+    class StressSimulationEngine <<Deterministic_Stress>> {
+        - repayment_engine: RepaymentEngine
+        + run_stress_test(base_terms: LoanTerms, stress_params: StressScenarioParams): StressTestResult
+        - _apply_stress(base: LoanTerms, params: StressScenarioParams): LoanTerms
+        - _calculate_early_repayment(base_result: RepaymentScheduleResult, early_month: int, penalty_pct: Decimal, base_terms: LoanTerms): dict
+        - _compare_summaries(base_summary: dict, stressed_summary: dict, params: StressScenarioParams): List<StressComparisonKPI>
+        - _generate_recommendations(comparison: List<StressComparisonKPI>, params: StressScenarioParams): List<str>
+    }
+}
+
+package "Grounded AI Advisor Layer" {
+    class RepaymentAdvisor <<LLM_Advisor>> {
+        + explain_schedule(result: RepaymentScheduleResult): dict
+        + explain_stress_test(result: StressTestResult): dict
+    }
+}
+
+package "Domain Entities & Enums" {
+    enum AmortizationMethod {
+        EQUAL_INSTALLMENT
+        EQUAL_PRINCIPAL
+        FLAT_RATE
+        BULLET
+    }
+
+    enum PaymentFrequency {
+        MONTHLY
+        QUARTERLY
+    }
+
+    enum StressType {
+        RATE_SHOCK
+        TERM_EXTENSION
+        EARLY_REPAYMENT
+        GRACE_PERIOD
+        COMBINED
+    }
+
+    class LoanTerms <<ValueObject>> {
+        + principal: Decimal
+        + annual_rate: Decimal
+        + term_months: int
+        + currency: str = "VND"
+        + rate_type: str = "FIXED"
+        + payment_frequency: PaymentFrequency
+        + amortization_method: AmortizationMethod
+        + processing_fee_pct: Decimal = 0.01
+        + insurance_fee_pct: Decimal = 0.0
+        + fee_timing: str = "UPFRONT"
+        + grace_period_months: int = 0
+        + start_date: str = "2026-10-01"
+        + scenario_id: str
+        + data_mode: str = "simulation"
+    }
+
+    class PaymentRecord <<ValueObject>> {
+        + period: int
+        + payment_date: str
+        + opening_balance: float
+        + principal_payment: float
+        + interest_payment: float
+        + total_payment: float
+        + closing_balance: float
+        + cumulative_principal: float
+        + cumulative_interest: float
+    }
+
+    class RepaymentScheduleResult <<DTO>> {
+        + schedule_id: str
+        + scenario_id: str
+        + data_mode: str = "simulation"
+        + loan_terms: dict
+        + payment_schedule: List<PaymentRecord>
+        + summary: dict
+        + cashflow_impact: List<dict>
+        + fees: dict
+        + assumptions: List<str>
+        + limitations: List<str>
+    }
+
+    class StressScenarioParams <<ValueObject>> {
+        + stress_type: StressType
+        + rate_shock_bps: int
+        + term_extension_months: int
+        + early_repayment_month: int
+        + early_repayment_penalty_pct: Decimal
+        + grace_period_months: int
+        + description: str
+    }
+
+    class StressComparisonKPI <<ValueObject>> {
+        + kpi_name: str
+        + baseline_value: float
+        + stressed_value: float
+        + absolute_change: float
+        + relative_change: float
+        + unit: str
+        + impact_assessment: str
+    }
+
+    class StressTestResult <<DTO>> {
+        + stress_id: str
+        + scenario_id: str
+        + data_mode: str = "simulation"
+        + stress_type: str
+        + stress_description: str
+        + base_schedule_summary: dict
+        + stressed_schedule_summary: dict
+        + comparison_kpis: List<StressComparisonKPI>
+        + base_payment_schedule: List<dict>
+        + stressed_payment_schedule: List<dict>
+        + recommendations: List<str>
+        + limitations: List<str>
+    }
+}
+
+' Relationships
+ServiceAPI --> RepaymentEngine : delegates
+ServiceAPI --> StressSimulationEngine : delegates
+ServiceAPI --> RepaymentAdvisor : explains results
+
+LoanTerms *-- AmortizationMethod
+LoanTerms *-- PaymentFrequency
+StressScenarioParams *-- StressType
+
+RepaymentEngine ..> LoanTerms : processes
+RepaymentEngine ..> RepaymentScheduleResult : generates
+RepaymentScheduleResult *-- PaymentRecord
+
+StressSimulationEngine --> RepaymentEngine : uses to compute baseline & stressed
+StressSimulationEngine ..> StressScenarioParams : applies
+StressSimulationEngine ..> StressTestResult : produces
+StressTestResult *-- StressComparisonKPI
+
+RepaymentAdvisor ..> RepaymentScheduleResult : interprets
+RepaymentAdvisor ..> StressTestResult : interprets
+
+note right of RepaymentEngine
+  Guarantees:
+  - Decimal arithmetic throughout
+  - Last period balance drift correction -> 0.00
+  - data_mode = 'simulation'
+  - Zero mutation to ledger
+end note
+
+@enduml
